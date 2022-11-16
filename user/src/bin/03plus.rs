@@ -13,7 +13,7 @@ fn main() -> i32 {
     let mut res:i32;
 
     res = num1 + num2;
-    println!("Sum:{}",res);
+    println!("10 + 2 = {}",res);
             unsafe {        
                 asm!("sret");
             }
