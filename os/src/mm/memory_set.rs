@@ -36,8 +36,46 @@ lazy_static! {
     )});
 }
 
+pub struct MemorySet {
+    page_table: PageTable,
+    areas: Vec<MapArea>,
+}
 
 impl MemorySet {
+    pub fn new_bare() -> Self {
+        Self {
+            page_table: PageTable::new(),
+            areas: Vec::new(),
+        }
+    }
+    pub fn token(&self) -> usize {
+        self.page_table.token()
+    }
+    /// Assume that no conflicts.
+    pub fn insert_framed_area(&mut self, start_va: VirtAddr, end_va: VirtAddr, permission: MapPermission) {
+        self.push(MapArea::new(
+            start_va,
+            end_va,
+            MapType::Framed,
+            permission,
+        ), None);
+    }
+    fn push(&mut self, mut map_area: MapArea, data: Option<&[u8]>) {
+        map_area.map(&mut self.page_table);
+        if let Some(data) = data {
+            map_area.copy_data(&mut self.page_table, data);
+        }
+        self.areas.push(map_area);
+    }
+    /// Mention that trampoline is not collected by areas.
+    fn map_trampoline(&mut self) {
+        self.page_table.map(
+            VirtAddr::from(TRAMPOLINE).into(),
+            PhysAddr::from(strampoline as usize).into(),
+            PTEFlags::R | PTEFlags::X,
+        );
+    }
+    /// Without kernel stacks.
     pub fn new_kernel() -> Self {
         let mut memory_set = Self::new_bare();
         // map trampoline
@@ -84,8 +122,7 @@ impl MemorySet {
         ), None);
         memory_set
     }
-
-   /// Include sections in elf and trampoline and TrapContext and user stack,
+    /// Include sections in elf and trampoline and TrapContext and user stack,
     /// also returns user_sp and entry point.
     pub fn from_elf(elf_data: &[u8]) -> (Self, usize, usize) {
         let mut memory_set = Self::new_bare();
@@ -142,69 +179,6 @@ impl MemorySet {
         ), None);
         (memory_set, user_stack_top, elf.header.pt2.entry_point() as usize)
     }
-}
-
-pub struct MapArea {
-    vpn_range: VPNRange,
-    data_frames: BTreeMap<VirtPageNum, FrameTracker>,
-    map_type: MapType,
-    map_perm: MapPermission,
-}
-
-#[derive(Copy, Clone, PartialEq, Debug)]
-pub enum MapType {
-    Identical,
-    Framed,
-}
-
-bitflags! {
-    pub struct MapPermission: u8 {
-        const R = 1 << 1;
-        const W = 1 << 2;
-        const X = 1 << 3;
-        const U = 1 << 4;
-    }
-}
-
-pub struct MemorySet {
-    page_table: PageTable,
-    areas: Vec<MapArea>,
-}
-
-impl MemorySet {
-    pub fn new_bare() -> Self {
-        Self {
-            page_table: PageTable::new(),
-            areas: Vec::new(),
-        }
-    }
-    pub fn token(&self) -> usize {
-        self.page_table.token()
-    }
-    /// Assume that no conflicts.
-    pub fn insert_framed_area(&mut self, start_va: VirtAddr, end_va: VirtAddr, permission: MapPermission) {
-        self.push(MapArea::new(
-            start_va,
-            end_va,
-            MapType::Framed,
-            permission,
-        ), None);
-    }
-    fn push(&mut self, mut map_area: MapArea, data: Option<&[u8]>) {
-        map_area.map(&mut self.page_table);
-        if let Some(data) = data {
-            map_area.copy_data(&mut self.page_table, data);
-        }
-        self.areas.push(map_area);
-    }
-    /// Mention that trampoline is not collected by areas.
-    fn map_trampoline(&mut self) {
-        self.page_table.map(
-            VirtAddr::from(TRAMPOLINE).into(),
-            PhysAddr::from(strampoline as usize).into(),
-            PTEFlags::R | PTEFlags::X,
-        );
-    }
     pub fn activate(&self) {
         let satp = self.page_table.token();
         unsafe {
@@ -215,6 +189,13 @@ impl MemorySet {
     pub fn translate(&self, vpn: VirtPageNum) -> Option<PageTableEntry> {
         self.page_table.translate(vpn)
     }
+}
+
+pub struct MapArea {
+    vpn_range: VPNRange,
+    data_frames: BTreeMap<VirtPageNum, FrameTracker>,
+    map_type: MapType,
+    map_perm: MapPermission,
 }
 
 impl MapArea {
@@ -290,6 +271,21 @@ impl MapArea {
             }
             current_vpn.step();
         }
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Debug)]
+pub enum MapType {
+    Identical,
+    Framed,
+}
+
+bitflags! {
+    pub struct MapPermission: u8 {
+        const R = 1 << 1;
+        const W = 1 << 2;
+        const X = 1 << 3;
+        const U = 1 << 4;
     }
 }
 
